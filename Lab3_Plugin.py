@@ -136,7 +136,7 @@ def create_dot_graph(func, instruction_list, jumps, conditional_jumps, ret_instr
     return dot_graph
 
 
-def create_dot_graph_DD(func, instruction_list, jumps, conditional_jumps, ret_instructions, dependsOn):
+def create_dot_graph_DD(func, instruction_list, dependsOn):
     """
     Generates a DOT graph representation of the control flow within a function.
     """
@@ -195,7 +195,7 @@ def create_dot_graph_DD(func, instruction_list, jumps, conditional_jumps, ret_in
 
 
 
-def operandRegisterHelper(instruction, defs, uses, addr_str):
+def operandRegisterHelper(instruction, defs, uses):
     numOperand = instruction.getNumOperands()
     for i in range(numOperand):
         operand = instruction.getRegister(i)
@@ -258,7 +258,7 @@ def analyze_instruction(instruction, addr_str):
     defs = []  # List to hold defined variables
     uses = []  # List to hold used variables
 
-    operandRegisterHelper(instruction, defs, uses, addr_str)
+    operandRegisterHelper(instruction, defs, uses)
     if mnemonic == 'CALL':
         callTargetRepresentation = instruction.getDefaultOperandRepresentation(0)
         addressMatch = re.search(r'\[([0-9a-fx]+)\]', callTargetRepresentation, re.IGNORECASE)
@@ -467,8 +467,8 @@ def path_to_instructions(path):
             else:
                 # If the instruction address exceeds the block's max address, stop processing this block
                 break
-    print("===")
-    print("||ins:", instructions)
+    #print("===")
+    #print("||ins:", instructions)
     return instructions
 
 
@@ -565,17 +565,27 @@ def process_functions():
             monitor = ConsoleTaskMonitor()
             functions_count += 1
             instruction_list, jumps, conditional_jumps, ret_instructions, def_use_info, dependsOn = collect_instructions(func)
-            dot_graph = create_dot_graph_DD(func, instruction_list, jumps, conditional_jumps, ret_instructions, dependsOn)
-            print(dot_graph)
+
             #print("debug: ", dependsOn['40101c'])
-            dot_graph_UD = create_dot_graph(func, instruction_list, jumps, conditional_jumps, ret_instructions,def_use_info)
-            print(dot_graph_UD)
-            final_result += dot_graph + "\n\n"
+            dot_graph_DU = create_dot_graph(func, instruction_list, jumps, conditional_jumps, ret_instructions,def_use_info)
+            print(dot_graph_DU)
+            final_result += dot_graph_DU + "\n\n"
 
             ret_blocks = find_ret_blocks(func)
-            print("ret_blocks: {}".format(ret_blocks))
+            #print("ret_blocks: {}".format(ret_blocks))
+            print(instruction_list[0])
+            addr, paths = reverse_traverse_cfg(func, ret_blocks, basicBlockModel, monitor)
+            for path in paths:
+                storage = DDStorage()
+                for instruction in path:
+                    str, defs, uses = analyze_instruction(instruction, addr)
+                    depend = storage.processDataDep(uses, defs, addr)
+                    dependsOn[addr] = depend
+                dot_graph = create_dot_graph_DD(func, instruction_list, dependsOn)
+                final_result += dot_graph + "\n\n"
+            print(instruction_list[0])
 
-            reverse_traverse_cfg(func, ret_blocks, basicBlockModel, monitor)
+            #print(dot_graph)
         #break
 
     return final_result
