@@ -393,10 +393,10 @@ def prepend_START_to_each_path(paths):
 
 
 def display_paths(paths):
-    print()
+    print("\n")
     for path in paths:
         print(path)
-        print()
+        print("\n")
     print("The length of paths is {}".format(len(paths)))
 
 
@@ -468,15 +468,15 @@ def process_functions():
             dot_graph = collect_instructions(func)
             print(dot_graph)
             final_result += dot_graph + "\n\n"
-            
+
             ret_blocks = find_ret_blocks(func)
             #print("ret_blocks: {}".format(ret_blocks))
 
 
-            all_instructions = reverse_traverse_cfg(func, ret_blocks)
+            all_instructions, allAddr = reverse_traverse_cfg(func, ret_blocks)
 
 
-    return final_result, all_instructions
+    return final_result, all_instructions, allAddr
 
 
 '''
@@ -516,22 +516,78 @@ def compute_data_dependencies(all_paths, instruction_def_use):
     for path_index, path in enumerate(all_paths):
         # Initialize a new DDStorage instance for each path
         dd_storage = DDStorage()
-        
+
         for instr in path:
             if instr == "START":
                 continue  # Skip special START marker
-            
+
 
     return all_dependencies
 
 
-def generate_DD_dot_graph():
-    pass
+def create_dot_graph_DD(func, instruction_list, dependsOn):
+    """
+    Generates a DOT graph representation of the control flow within a function.
+    """
+    # Convert the entry point of the function to a hexadecimal string
+    def sort_key(item):
+        match = re.search(r'n(\d+)', item)
+        if match:
+            return int(match.group(1))
+        return float('inf')
+    entry_point = "0x{}".format(func.getEntryPoint().toString().lstrip('0'))
+    dot_graph = 'digraph "{}" {{\n'.format(entry_point)
+    node_counter = 1
+    address_to_node = {}  # Maps addresses to node names
+
+    # Create graph nodes for each instruction address
+    for addr in instruction_list:
+        # insert n0
+        if len(address_to_node) == 0:
+            node_name = 'n0'
+            addr_label = "START"
+            address_to_node[addr_label] = node_name
+            label = "START"
+            dot_graph += '    {} [label = "{}"];\n'.format(node_name, label)
+
+        # insert normal n1 & beyond
+        node_name = 'n{}'.format(node_counter)
+        addr_label = "0x{}".format(str(addr))  # Ensure '0x' prefix
+        # Assign a label with define-use information if available
+        if addr in dependsOn:
+            label = "{}; DD: {}".format(addr_label, ', '.join(map(lambda x: '0x' + x if x != "START" else x, dependsOn[addr])))
+        else:
+            label = "{};".format(addr_label)
+        dot_graph += '    {} [label = "{}"];\n'.format(node_name, label)
+        address_to_node[addr] = node_name
+        node_counter += 1
+
+    dot_graph += '\n'  # Separate nodes from edges
+
+    # Add edges between nodes based on sequential and jump instructions:
+
+    allDep = []
+    #print(address_to_node.items())
+    for addr, node in address_to_node.items():
+        #print(addr, node)
+        if addr != "START":
+            for thisDependent in dependsOn[addr]:
+                if thisDependent == "START":
+                    allDep.append('{} -> {}'.format(node, 'n0'))
+                else:
+                    allDep.append('{} -> {}'.format(node, address_to_node[thisDependent]))
+    allDep = sorted(allDep, key=sort_key)
+    for i in allDep:
+        dot_graph += '    {};\n'.format(i)
+    dot_graph += '}'
+    return dot_graph
 
 
 def main():
-
-    try:
+    finalresult, allInstruction, allAddr = process_functions()
+    compute_data_dependencies(allInstruction, allAddr)
+    '''
+        try:
         final_result, all_instructions = process_functions()
         DD_dot_graph = generate_DD_dot_graph()
         print("{} functions, {} addresses, {} instructions processed.".format(functions_count, addresses_count,
@@ -548,6 +604,9 @@ def main():
 
     except Exception as e:
         raise Exception("Failed to create submission.dot. Error: {}".format(e))
+
+    '''
+
         
 if __name__ == '__main__':
     main()
