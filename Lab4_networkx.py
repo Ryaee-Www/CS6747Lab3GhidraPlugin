@@ -1,37 +1,3 @@
-"""
-Data Dependence Algorithm:
-1. Enhance the analyze_instruction function to accurately capture all definitions and uses of variables.
-    - Fix existing bugs in the function.
-2. Traverse the Control Flow Graph (CFG): Implement a method to traverse the CFG to find dependencies based on the collected definitions and uses.
-    - For functions with multiple RET instructions, enumerate paths for each RET. Consider using a recursive reverse search of the CFG.
-    - Each path should start from "START"
-    - To avoid the path explosion problem often encountered with loops, set a loop unrolling limit (execute each loop at least twice).
-    - Ensure full path coverage, including cycles and cycles within cycles.
-3. Identify the Most Recent Definition of a Variable: For each instruction along the path, find the most recent definition of a variable before its use by traversing the path backward.
-4. Modify the output to include data dependencies for each instruction.
-5. Generate a data dependency graph in DOT format.
-
-General Principles:
-- If a register or pointer has not been modified in the function, data dependence is on START.
-- The CFG should be followed in reverse instead of linear search to ensure that conditional jumps do not disrupt the algorithm.
-
-Algorithm should roughly be as below:
-- Register input: DD on the most recent instruction that defines the register.
-- Pointer input: DD on the most recent instruction that defines the register AND the most recent instruction that defines the data held at that pointer.
-- Conditional Jumps: DD on the most recent instruction that defines the relevant Flag (e.g., SUB, CMP, TEST).
-- Address Input: DD on the address.
-- POP instruction: POP takes a value (uses ESP and takes the most recent value). Depends on the current value of ESP and the value it will be popping from the stack.
-- PUSH instruction: PUSH adds a value (uses ESP and defines a new value), DD on the most recent POP/PUSH and the dependency on whatever value they're pushing.
-
-Example:
-MOV EAX, 0x1 -> DD: 
-MOV ECX, 0x2 -> DD:
-PUSH ECX -> DD: 2, START
-PUSH EAX -> DD: 3,1
-POP ECX -> DD: 4
-POP EAX-> DD: 5, 3
-"""
-
 import sys
 sys.path.append('/usr/lib/python2.7/site-packages')
 sys.path.append('/usr/lib64/python2.7/site-packages/gtk-2.0')
@@ -52,17 +18,6 @@ addresses_count = 0
 instructions_count = 0
 instruction_def_use = {}
 
-
-class DDStorage():
-    def __init__(self):
-        #self.uses = {}
-        self.defs = {} #{register/pointer offset: address}
-    def has(self, register):
-        return register in self.defs
-    def getAddress(self, register):
-        return self.defs[register]
-    def newDefine(self, register, address):
-        self.defs[register] = address
 
 def create_dot_graph(func, instruction_list, jumps, conditional_jumps, ret_instructions, def_use_info):
     """
@@ -275,7 +230,7 @@ def analyze_instruction(instruction, addr_str):
 
     # Generate and return the define-use label without handling 'CALL'
     def_use_label = "D: {} U: {}".format(", ".join(sorted(defs)), ", ".join(sorted(uses)))
-    instruction_def_use[addr_str] = {"def": defs, "use": uses}
+    instruction_def_use[instruction] = {"def": defs, "use": uses}
     return def_use_label
 
 
@@ -400,7 +355,6 @@ def display_paths(paths):
     print("The length of paths is {}".format(len(paths)))
 
 
-
 def reverse_traverse_cfg(func, ret_blocks):
     # Initialize necessary components
     basicBlockModel = BasicBlockModel(currentProgram)
@@ -449,91 +403,188 @@ def reverse_traverse_cfg(func, ret_blocks):
 
     return prepended_paths
 
+class DDStorage:
+    # A custom data structure used to manage and track data dependencies in a set of instructions.
+    def __init__(self):
+        # Initialize storage containers for registers, pointers, flags, and a stack
+        self.registers = {}  # Maps registers to their most recent defining instruction
+        self.pointers = {}   # Maps pointers to lists of their defining instructions
+        self.flags = {}      # Maps flags to their most recent defining instruction
+        self.stack = []  # Tracks stack operations (PUSH/POP) with their instructions
 
+    def update_register(self, instr, register, address):
+        # Update the register with the instruction and address
+        self.registers[register] = (instr, address)
 
+    def update_pointer(self, instr, pointer, address):
+        # If the pointer doesn't exist, initialize it as a list
+        if pointer not in self.pointers:
+            self.pointers[pointer] = []
+        # Append the instruction and address to the pointer's list
+        self.pointers[pointer].append((instr, address))
 
-def process_functions():
-    global functions_count
-    final_result = ""
-    function_manager = currentProgram.getFunctionManager()
-    functions = function_manager.getFunctions(True)
+    def update_flag(self, instr, flag, address):
+        # Update the flag with the instruction and address
+        self.flags[flag] = (instr, address)
 
-    for func in functions:
+    def push_stack(self, instr, address):
+        # Push an instruction and its address onto the stack
+        self.stack.append((instr, address))
 
-        if func.getName() == "FUN_004019eb":
-        #if func.getName() == "FUN_00401406":
-        #if func.getName() == "FUN_00402292":
+    def pop_stack(self):
+        # Pop the top instruction from the stack if it's not empty
+        if self.stack:
+            return self.stack.pop()
+        return None
 
-            functions_count += 1
-            dot_graph = collect_instructions(func)
-            print(dot_graph)
-            final_result += dot_graph + "\n\n"
-            
-            ret_blocks = find_ret_blocks(func)
-            #print("ret_blocks: {}".format(ret_blocks))
+class DDStorage:
+    def __init__(self):
+        self.registers = {}
+        self.pointers = {}
+        self.flags = {}
+        self.stack = []
 
+    def update_register(self, register, instr_address):
+        self.registers[register] = instr_address
 
-            all_instructions = reverse_traverse_cfg(func, ret_blocks)
+    def update_pointer(self, pointer, instr_address):
+        if pointer not in self.pointers:
+            self.pointers[pointer] = []
+        self.pointers[pointer].append(instr_address)
 
+    def update_flag(self, flag, instr_address):
+        self.flags[flag] = instr_address
 
-    return final_result, all_instructions
+    def pop_stack(self):
+        return self.stack.pop() if self.stack else None
 
+    def push_stack(self, instr_address):
+        self.stack.append(instr_address)
 
-'''
-Processes one line of assembly code. should be called in a loop to process every line in a basic block
-
-@param uses: a list of 'USE', contains register, or an pointer offset, data, etc. that is used in the assembly code
-@param defs: a list of 'DEF', same as 'USE', that is defined or modified in the assembly code
-@param addr: a string that represents the address of the current line of assembly code.
-@param DDStorage, an object contains all previously defined registers, each basic block should have its own Storage object(?)
-
-@return: a list of data dependency, in form of ["address"], contains "START" if used 
-'''
-def processDataDep(uses, defs, addr, DDStorage):
-    dependsOn = []
-    for i in uses:
-        if DDStorage.has(i):
-            dependsOn.append(DDStorage.getAddress(i))
-        else:
-            if 'START' not in dependsOn:
-                dependsOn.append('START')
-    for i in defs:
-        DDStorage.newDefine(i, addr)
-
-    return dependsOn
-
+    def find_dependencies(self, use):
+        dependencies = []
+        if use in self.registers:
+            dependencies.append(self.registers[use])
+        if use in self.pointers:
+            dependencies.extend(self.pointers[use])
+        if use in self.flags:
+            dependencies.append(self.flags[use])
+        return dependencies
 
 def compute_data_dependencies(all_paths, instruction_def_use):
-    """
-    Computes data dependencies for each instruction in each path.
-
-    :param all_paths: A list of paths, each path is a list of instructions.
-    :param instruction_def_use: A dictionary mapping instructions to their definitions and uses.
-    :return: A dictionary mapping each instruction to its data dependencies.
-    """
     all_dependencies = {}
 
     for path_index, path in enumerate(all_paths):
-        # Initialize a new DDStorage instance for each path
-        dd_storage = DDStorage()
-        
-        for instr in path:
+        dd_storage = DDStorage()  # Initialize a new DDStorage object for each path
+        definitions = {}  # Maps variables to their defining instruction address for direct dependencies
+
+        for instr_index, instr in enumerate(path):
             if instr == "START":
-                continue  # Skip special START marker
-            
+                continue  # Skip processing for START instruction as it has no dependencies
+
+            dependencies = []
+
+            if instr in instruction_def_use:
+                defs, uses = instruction_def_use[instr]['def'], instruction_def_use[instr]['use']
+            else:
+                defs, uses = [], []
+
+            # Determine the instruction address
+            instr_address = instr.getAddress().toString()  # This line assumes you have a way to get the address
+
+            # Identify dependencies using addresses
+            for use in uses:
+                dep_addresses = dd_storage.find_dependencies(use)
+                dependencies.extend(dep_addresses)
+
+            # Update DDStorage with new definitions using addresses
+            for def_item in defs:
+                if def_item.startswith('[') and def_item.endswith(']'):
+                    dd_storage.update_pointer(def_item, instr_address)
+                else:
+                    dd_storage.update_register(def_item, instr_address)
+
+            instr_key = (instr_address, instr)  # Use instruction's address and instruction as key
+            all_dependencies[instr_key] = {
+                'def': defs,
+                'use': uses,
+                'DD': dependencies,  # Now storing addresses of dependencies
+            }
 
     return all_dependencies
 
 
-def generate_DD_dot_graph():
-    pass
+def generate_DD_dot_graph(func, all_dependencies):
+    entry_point = "{}".format(func.getEntryPoint().toString().lstrip('0'))
+    digraph_name = "digraph 0x{}".format(entry_point)
+    dot_graph = "{} {{\n".format(digraph_name)
+    dot_graph += ' n0 [label = "START"];\n'
+    
+    address_to_node = {"START": "n0"}
+    node_counter = 1
+    edges = []
 
+    for instr_key in sorted(all_dependencies.keys(), key=lambda x: int(x[0], 16)):
+        instr_address, _ = instr_key
+        node_name = 'n{}'.format(node_counter)
+        address_to_node[instr_address] = node_name
+        formatted_address = instr_address.lstrip('0')
+        dd_labels = ', '.join(['0x{}'.format(addr.lstrip('0')) for addr in all_dependencies[instr_key]['DD']]) if all_dependencies[instr_key]['DD'] else ''
+        dot_graph += ' {} [label = "0x{}; DD: {}"];\n'.format(node_name, formatted_address, dd_labels)
+        node_counter += 1
+
+        for dep_address in all_dependencies[instr_key]['DD']:
+            dep_node = address_to_node.get(dep_address, "n0")
+            edges.append((instr_address, dep_address))
+
+    # Separate nodes from edges with an empty line for clarity
+    dot_graph += '\n'
+
+    # Sort edges by the source instruction address before adding them to the graph
+    for src_address, dep_address in sorted(edges, key=lambda x: int(x[0], 16)):
+        src_node = address_to_node[src_address]
+        dep_node = address_to_node.get(dep_address, "n0")
+        dot_graph += ' {} -> {};\n'.format(src_node, dep_node)
+
+    dot_graph += '}\n'
+    return dot_graph
+
+
+def process_functions():
+    global functions_count
+    def_use_result = ""
+    DD_result = ""
+    function_manager = currentProgram.getFunctionManager()
+    functions = function_manager.getFunctions(True)
+
+    for func in functions:
+        #if func.getName() == "FUN_004019eb":
+        #if func.getName() == "FUN_00401406":
+        #if func.getName() == "FUN_00402292":
+        #if func.getName() == "FUN_0040101c":
+            functions_count += 1
+            def_use_graph = collect_instructions(func)
+            print(def_use_graph)
+            def_use_result += def_use_graph + "\n\n"
+            
+            ret_blocks = find_ret_blocks(func)
+            print("ret_blocks: {}".format(ret_blocks))
+
+            all_paths = reverse_traverse_cfg(func, ret_blocks)
+            print()
+            print(len(all_paths))
+            print()
+            all_dependencies = compute_data_dependencies(all_paths, instruction_def_use)
+            DD_graph = generate_DD_dot_graph(func, all_dependencies)
+            print(DD_graph)
+            DD_result += DD_graph + "\n\n"
+
+    return def_use_result, DD_result
 
 def main():
 
     try:
-        final_result, all_instructions = process_functions()
-        DD_dot_graph = generate_DD_dot_graph()
+        def_use_result, DD_result = process_functions()
         print("{} functions, {} addresses, {} instructions processed.".format(functions_count, addresses_count,
                                                                               instructions_count))
         # Define the file path to the Desktop directory
@@ -542,9 +593,8 @@ def main():
 
         # Attempt to write content to the file
         with open(file_path, "w") as file:
-            file.write(final_result)
+            file.write(DD_result)
         print("submission.dot created.")
-        print(instruction_def_use)
 
     except Exception as e:
         raise Exception("Failed to create submission.dot. Error: {}".format(e))
